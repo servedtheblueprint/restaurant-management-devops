@@ -103,10 +103,16 @@ def row_out(table, row):
 
 def make_crud(table, path):
     spec = SPECS[table]
+    # The table name comes from the fixed SPECS dict above, never from user input,
+    # so building these SQL strings is safe (hence the nosec markers for Bandit).
+    select_all = "SELECT * FROM %s" % table  # nosec B608
+    select_one = "SELECT * FROM %s WHERE id = ?" % table  # nosec B608
+    exists_one = "SELECT 1 FROM %s WHERE id = ?" % table  # nosec B608
+    delete_one = "DELETE FROM %s WHERE id = ?" % table  # nosec B608
 
     def list_items():
         db = get_db()
-        sql, params = "SELECT * FROM %s" % table, []
+        sql, params = select_all, []
         clauses = []
         for col in FILTERS[table]:
             if request.args.get(col) is not None:
@@ -121,20 +127,18 @@ def make_crud(table, path):
         values = parse_fields(spec, json_body())
         db = get_db()
         cols = list(values)
+        marks = ", ".join("?" for _ in cols)
+        insert_sql = "INSERT INTO %s (%s) VALUES (%s)" % (table, ", ".join(cols), marks)  # nosec B608
         try:
-            cur = db.execute(
-                "INSERT INTO %s (%s) VALUES (%s)"
-                % (table, ", ".join(cols), ", ".join("?" for _ in cols)),
-                [values[c] for c in cols],
-            )
+            cur = db.execute(insert_sql, [values[c] for c in cols])
             db.commit()
         except sqlite3.IntegrityError as exc:
             return integrity_response(exc)
-        row = db.execute("SELECT * FROM %s WHERE id = ?" % table, (cur.lastrowid,)).fetchone()
+        row = db.execute(select_one, (cur.lastrowid,)).fetchone()
         return jsonify(row_out(table, row)), 201
 
     def get_item(item_id):
-        row = get_db().execute("SELECT * FROM %s WHERE id = ?" % table, (item_id,)).fetchone()
+        row = get_db().execute(select_one, (item_id,)).fetchone()
         if row is None:
             return jsonify(error="not found"), 404
         return jsonify(row_out(table, row))
@@ -144,26 +148,25 @@ def make_crud(table, path):
         if not values:
             raise ValidationError("no valid fields to update")
         db = get_db()
-        if db.execute("SELECT 1 FROM %s WHERE id = ?" % table, (item_id,)).fetchone() is None:
+        if db.execute(exists_one, (item_id,)).fetchone() is None:
             return jsonify(error="not found"), 404
         cols = list(values)
+        set_clause = ", ".join("%s = ?" % c for c in cols)
+        update_sql = "UPDATE %s SET %s WHERE id = ?" % (table, set_clause)  # nosec B608
         try:
-            db.execute(
-                "UPDATE %s SET %s WHERE id = ?" % (table, ", ".join("%s = ?" % c for c in cols)),
-                [values[c] for c in cols] + [item_id],
-            )
+            db.execute(update_sql, [values[c] for c in cols] + [item_id])
             db.commit()
         except sqlite3.IntegrityError as exc:
             return integrity_response(exc)
-        row = db.execute("SELECT * FROM %s WHERE id = ?" % table, (item_id,)).fetchone()
+        row = db.execute(select_one, (item_id,)).fetchone()
         return jsonify(row_out(table, row))
 
     def delete_item(item_id):
         db = get_db()
-        if db.execute("SELECT 1 FROM %s WHERE id = ?" % table, (item_id,)).fetchone() is None:
+        if db.execute(exists_one, (item_id,)).fetchone() is None:
             return jsonify(error="not found"), 404
         try:
-            db.execute("DELETE FROM %s WHERE id = ?" % table, (item_id,))
+            db.execute(delete_one, (item_id,))
             db.commit()
         except sqlite3.IntegrityError:
             return jsonify(error="cannot delete: record is referenced by orders"), 409
