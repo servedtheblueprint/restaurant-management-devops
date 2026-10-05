@@ -124,3 +124,4 @@ docker exec jenkins cat /var/jenkins_home/secrets/initialAdminPassword
 Open http://localhost:8080, install suggested plugins, then create a *Pipeline* job:
 Pipeline script from SCM -> Git -> your repo URL -> branch `*/main` -> Script Path `Jenkinsfile`.
 Enable *Poll SCM* with `H/2 * * * *`, then click *Build Now*.
+
