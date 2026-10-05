@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Restaurant Management System</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1d2330; --muted:#6b7280; --accent:#c2410c; --line:#e5e7eb; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--ink); }
+  header { background:var(--accent); color:#fff; padding:14px 20px; display:flex; justify-content:space-between; align-items:center; }
+  header h1 { font-size:1.15rem; margin:0; }
+  header small { opacity:.85; }
+  nav { display:flex; gap:6px; padding:12px 20px 0; flex-wrap:wrap; }
+  nav button { border:1px solid var(--line); background:var(--card); padding:8px 14px; border-radius:8px 8px 0 0; cursor:pointer; font-size:.9rem; }
+  nav button.active { background:var(--accent); color:#fff; border-color:var(--accent); }
+  main { padding:0 20px 30px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:0 8px 8px 8px; padding:16px; }
+  form { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px; align-items:end; }
+  label { display:flex; flex-direction:column; font-size:.78rem; color:var(--muted); gap:3px; }
+  input, select { padding:7px 9px; border:1px solid var(--line); border-radius:6px; font-size:.9rem; }
+  button.primary { background:var(--accent); color:#fff; border:0; padding:9px 16px; border-radius:6px; cursor:pointer; }
+  button.small { padding:4px 9px; font-size:.78rem; border:1px solid var(--line); background:#fff; border-radius:5px; cursor:pointer; }
+  table { width:100%; border-collapse:collapse; font-size:.88rem; }
+  th, td { text-align:left; padding:8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--muted); font-weight:600; }
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; }
+  .stat { border:1px solid var(--line); border-radius:8px; padding:14px; }
+  .stat b { display:block; font-size:1.6rem; }
+  #msg { margin:10px 20px 0; padding:8px 12px; border-radius:6px; display:none; font-size:.88rem; }
+  #msg.err { display:block; background:#fee2e2; color:#991b1b; }
+  #msg.ok { display:block; background:#dcfce7; color:#166534; }
+  .hint { color:var(--muted); font-size:.8rem; margin:0 0 10px; }
+  .scroll { overflow-x:auto; }
+</style>
+</head>
+<body>
+<header><h1>Restaurant Management System</h1><small>v{{ version }}</small></header>
+<div id="msg"></div>
+<nav id="tabs"></nav>
+<main><div class="card" id="panel"></div></main>
+
+<script>
+const CRUD = {
+  restaurants: { title: 'Restaurants', path: '/api/restaurants',
+    fields: [['name','text'],['address','text'],['phone','text']] },
+  'menu-items': { title: 'Menu Items', path: '/api/menu-items',
+    fields: [['restaurant_id','number'],['name','text'],['category','text'],['price','number'],['available','checkbox']] },
+  customers: { title: 'Customers', path: '/api/customers',
+    fields: [['name','text'],['email','text'],['phone','text']] }
+};
+const TABS = ['dashboard', 'restaurants', 'menu-items', 'customers', 'orders'];
+const STATUSES = ['PLACED', 'PREPARING', 'SERVED', 'CANCELLED'];
+let current = 'dashboard';
+
+function el(tag, attrs, ...kids) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (k === 'class') n.className = v;
+    else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
+    else n.setAttribute(k, v);
+  }
+  for (const kid of kids) n.append(kid instanceof Node ? kid : document.createTextNode(String(kid)));
+  return n;
+}
+function flash(text, ok) {
+  const m = document.getElementById('msg');
+  m.textContent = text; m.className = ok ? 'ok' : 'err';
+  setTimeout(() => { m.className = ''; m.style.display = ''; }, 3500);
+}
+async function api(method, url, body) {
+  const r = await fetch(url, { method, headers: { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body) });
+  const data = r.status === 204 ? null : await r.json().catch(() => null);
+  if (!r.ok) throw new Error((data && data.error) || ('HTTP ' + r.status));
+  return data;
+}
+async function guard(fn) { try { await fn(); } catch (e) { flash(e.message, false); } }
+
+function renderTabs() {
+  const nav = document.getElementById('tabs');
+  nav.replaceChildren(...TABS.map(t => el('button', { class: t === current ? 'active' : '',
+    onclick: () => { current = t; show(); } }, t.replace('-', ' '))));
+}
+function table(rows, extra) {
+  if (!rows.length) return el('p', { class: 'hint' }, 'No records yet.');
+  const cols = Object.keys(rows[0]).filter(c => c !== 'items');
+  const head = el('tr', {}, ...cols.map(c => el('th', {}, c)), ...(extra ? [el('th', {}, 'actions')] : []));
+  const body = rows.map(r => el('tr', {}, ...cols.map(c => el('td', {}, r[c] === null ? '' : r[c])),
+    ...(extra ? [el('td', {}, ...extra(r))] : [])));
+  return el('div', { class: 'scroll' }, el('table', {}, head, ...body));
+}
+
+async function showDashboard(panel) {
+  const s = await api('GET', '/api/stats');
+  panel.replaceChildren(el('div', { class: 'stats' },
+    ...Object.entries(s).map(([k, v]) => el('div', { class: 'stat' }, el('b', {}, v), k.replace('_', ' ')))));
+}
+
+async function showCrud(panel, key) {
+  const cfg = CRUD[key];
+  let editId = null;
+  const form = el('form');
+  const inputs = {};
+  cfg.fields.forEach(([name, type]) => {
+    const inp = el('input', { type, name, step: type === 'number' ? 'any' : null });
+    if (type === 'checkbox') inp.checked = true;
+    inputs[name] = inp;
+    form.append(el('label', {}, name.replace('_', ' '), inp));
+  });
+  const submit = el('button', { class: 'primary', type: 'submit' }, 'Add');
+  form.append(submit);
+  const holder = el('div');
+
+  async function reload() {
+    const rows = await api('GET', cfg.path);
+    holder.replaceChildren(table(rows, r => [
+      el('button', { class: 'small', onclick: () => {
+        editId = r.id; submit.textContent = 'Save #' + r.id;
+        cfg.fields.forEach(([n, t]) => { if (t === 'checkbox') inputs[n].checked = !!r[n]; else inputs[n].value = r[n] === null ? '' : r[n]; });
+      } }, 'Edit'), ' ',
+      el('button', { class: 'small', onclick: () => guard(async () => {
+        if (!confirm('Delete record #' + r.id + '?')) return;
+        await api('DELETE', cfg.path + '/' + r.id); flash('Deleted', true); await reload();
+      }) }, 'Delete')
+    ]));
+  }
+  form.addEventListener('submit', ev => { ev.preventDefault(); guard(async () => {
+    const body = {};
+    cfg.fields.forEach(([n, t]) => {
+      const v = inputs[n];
+      if (t === 'checkbox') body[n] = v.checked;
+      else if (t === 'number') { if (v.value !== '') body[n] = Number(v.value); }
+      else body[n] = v.value;
+    });
+    if (editId) await api('PUT', cfg.path + '/' + editId, body); else await api('POST', cfg.path, body);
+    flash(editId ? 'Updated' : 'Added', true);
+    editId = null; submit.textContent = 'Add'; form.reset(); await reload();
+  }); });
+  panel.replaceChildren(form, holder);
+  await reload();
+}
+
+async function showOrders(panel) {
+  const [customers, restaurants] = await Promise.all([api('GET', '/api/customers'), api('GET', '/api/restaurants')]);
+  const cSel = el('select', {}, ...customers.map(c => el('option', { value: c.id }, c.id + ' - ' + c.name)));
+  const rSel = el('select', {}, ...restaurants.map(r => el('option', { value: r.id }, r.id + ' - ' + r.name)));
+  const items = el('input', { type: 'text', placeholder: 'menu_item_id:qty, e.g. 1:2, 3:1', size: '30' });
+  const form = el('form', {}, el('label', {}, 'customer', cSel), el('label', {}, 'restaurant', rSel),
+    el('label', {}, 'items', items), el('button', { class: 'primary', type: 'submit' }, 'Place order'));
+  const holder = el('div');
+
+  async function reload() {
+    const rows = await api('GET', '/api/orders');
+    const flat = rows.map(o => ({ ...o, items: o.items.map(i => i.name + ' x' + i.quantity).join(', ') }));
+    const view = flat.map(o => ({ id: o.id, customer_id: o.customer_id, restaurant_id: o.restaurant_id,
+      items: o.items, total: o.total, status: o.status, created_at: o.created_at }));
+    holder.replaceChildren(table(view, o => {
+      const sel = el('select', {}, ...STATUSES.map(s => el('option', { value: s }, s)));
+      sel.value = o.status;
+      sel.addEventListener('change', () => guard(async () => {
+        await api('PATCH', '/api/orders/' + o.id + '/status', { status: sel.value }); flash('Status updated', true); await reload();
+      }));
+      return [sel, ' ', el('button', { class: 'small', onclick: () => guard(async () => {
+        await api('DELETE', '/api/orders/' + o.id); await reload();
+      }) }, 'Delete')];
+    }));
+  }
+  form.addEventListener('submit', ev => { ev.preventDefault(); guard(async () => {
+    const lines = items.value.split(',').map(s => s.trim()).filter(Boolean).map(s => {
+      const [id, q] = s.split(':').map(x => x.trim());
+      return { menu_item_id: Number(id), quantity: q ? Number(q) : 1 };
+    });
+    await api('POST', '/api/orders', { customer_id: Number(cSel.value), restaurant_id: Number(rSel.value), items: lines });
+    flash('Order placed', true); items.value = ''; await reload();
+  }); });
+  panel.replaceChildren(form, el('p', { class: 'hint' }, 'Tip: see the Menu Items tab for item ids.'), holder);
+  await reload();
+}
+
+function show() {
+  renderTabs();
+  const panel = document.getElementById('panel');
+  guard(async () => {
+    if (current === 'dashboard') await showDashboard(panel);
+    else if (current === 'orders') await showOrders(panel);
+    else await showCrud(panel, current);
+  });
+}
+show();
+</script>
+</body>
+</html>

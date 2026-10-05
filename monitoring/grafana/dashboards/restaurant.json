@@ -1,0 +1,37 @@
+{
+  "title": "Restaurant Management System",
+  "uid": "restaurant-overview",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "time": { "from": "now-15m", "to": "now" },
+  "panels": [
+    {
+      "id": 1, "type": "timeseries", "title": "Requests per second by status",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        { "refId": "A", "expr": "sum by (status) (rate(restaurant_http_requests_total[1m]))",
+          "legendFormat": "{{status}}" }
+      ]
+    },
+    {
+      "id": 2, "type": "stat", "title": "Orders created",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [ { "refId": "A", "expr": "restaurant_orders_created_total" } ]
+    },
+    {
+      "id": 3, "type": "stat", "title": "App up (1 = yes)",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [ { "refId": "A", "expr": "up{job=\"restaurant-app\"}" } ]
+    },
+    {
+      "id": 4, "type": "logs", "title": "Application logs (Loki)",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 8 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [ { "refId": "A", "expr": "{service=\"app\"}" } ]
+    }
+  ]
+}
